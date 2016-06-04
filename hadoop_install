@@ -1,0 +1,178 @@
+http://www.rexamine.com/2015/02/installing-hadoop-2-6-0-on-centos-7/
+
+Edit /etc/hosts
+# nano /etc/hosts
+Add the following lines (change IP addresses accordingly):
+
+10.0.0.1 hmaster
+10.0.0.2 hslave1
+10.0.0.3 hslave2
+10.0.0.4 hslave3
+Create user hadoop
+# useradd hadoop
+# passwd hadoop
+Set up key-based (passwordless) login:
+# su hadoop
+$ ssh-keygen -t rsa
+$ ssh-copy-id -i ~/.ssh/id_rsa.pub hadoop@hmaster
+$ ssh-copy-id -i ~/.ssh/id_rsa.pub hadoop@hslave1
+$ ssh-copy-id -i ~/.ssh/id_rsa.pub hadoop@hslave2
+$ ssh-copy-id -i ~/.ssh/id_rsa.pub hadoop@hslave3
+$ chmod 0600 ~/.ssh/authorized_keys
+This will be useful when we’d like to start all necessary hadoop services on all the slave nodes.
+
+Installing Oracle Java SDK
+
+Download latest Oracle JDK and save it in the /opt directory.
+
+On hmaster, unpack Java:
+
+# cd /opt
+# tar -zxf jdk-8u31-linux-x64.tar.gz
+# mv jdk1.8.0_31 jdk
+Now propagete /opt/jdk to all the slaves
+
+# scp -r jdk hslave1:/opt
+# scp -r jdk hslave2:/opt
+# scp -r jdk hslave3:/opt
+On each node, let’s use the alternatives tool to set up Oracle Java as the default Java framework.
+# alternatives --install /usr/bin/java java /opt/jdk/bin/java 2
+# alternatives --config java # select appropriate program (/opt/jdk/bin/java)
+# alternatives --install /usr/bin/jar jar /opt/jdk/bin/jar 2
+# alternatives --install /usr/bin/javac javac /opt/jdk/bin/javac 2
+# alternatives --set jar /opt/jdk/bin/jar
+# alternatives --set javac /opt/jdk/bin/javac 
+Check if everything is OK by executing java -version.
+
+Set up environmental variables:
+# nano /etc/bashrc
+Add the following:
+
+export JAVA_HOME=/opt/jdk
+export JRE_HOME=/opt/jdk/jre
+export PATH=$PATH:/opt/jdk/bin:/opt/jdk/jre/bin
+And also possibly:
+
+alias ll='ls -l --color'
+alias cp='cp -i'
+alias mv='mv -i'
+alias rm='rm -i'
+Check if everyting is OK:
+
+# source /etc/bashrc
+# echo $JAVA_HOME
+Installing and configuring hadoop 2.6.0
+
+On master:
+
+# cd /opt
+# wget http://www.eu.apache.org/dist/hadoop/common/hadoop-2.6.0/hadoop-2.6.0.tar.gz
+# tar -zxf hadoop-2.6.0.tar.gz
+# rm hadoop-2.6.0.tar.gz
+# mv hadoop-2.6.0 hadoop
+Propagate /opt/hadoop to slave nodes:
+
+# scp -r hadoop hslave1:/opt
+# scp -r hadoop hslave2:/opt
+# scp -r hadoop hslave3:/opt
+Add the following lines to /home/hadoop/.bashrc on all the nodes (you may play with scp for that too):
+
+export HADOOP_PREFIX=/opt/hadoop
+export HADOOP_HOME=$HADOOP_PREFIX
+export HADOOP_COMMON_HOME=$HADOOP_PREFIX
+export HADOOP_CONF_DIR=$HADOOP_PREFIX/etc/hadoop
+export HADOOP_HDFS_HOME=$HADOOP_PREFIX
+export HADOOP_MAPRED_HOME=$HADOOP_PREFIX
+export HADOOP_YARN_HOME=$HADOOP_PREFIX
+export PATH=$PATH:$HADOOP_PREFIX/sbin:$HADOOP_PREFIX/bin
+Edit /opt/hadoop/etc/hadoop/core-site.xml – set up NameNode URI on every node:
+
+<configuration>
+<property>
+    <name>fs.defaultFS</name>
+        <value>hdfs://hmaster:9000/</value>
+        </property>
+        </configuration>
+        Create HDFS DataNode data dirs on every node and change ownership of /opt/hadoop:
+        
+        # chown hadoop /opt/hadoop/ -R
+        # chgrp hadoop /opt/hadoop/ -R
+        # mkdir /home/hadoop/datanode
+        # chown hadoop /home/hadoop/datanode/
+        # chgrp hadoop /home/hadoop/datanode/    
+        Edit /opt/hadoop/etc/hadoop/hdfs-site.xml – set up DataNodes:
+        
+        <configuration>
+        <property>
+          <name>dfs.replication</name>
+            <value>3</value>
+            </property>
+            <property>
+              <name>dfs.permissions</name>
+                <value>false</value>
+                </property>
+                <property>
+                   <name>dfs.datanode.data.dir</name>
+                      <value>/home/hadoop/datanode</value>
+                      </property>
+                      </configuration>
+                      Create HDFS NameNode data dirs on master:
+                      
+                      # mkdir /home/hadoop/namenode
+                      # chown hadoop /home/hadoop/namenode/
+                      # chgrp hadoop /home/hadoop/namenode/    
+                      Edit /opt/hadoop/etc/hadoop/hdfs-site.xml on master. Add further properties:
+                      
+                      <property>
+                              <name>dfs.namenode.data.dir</name>
+                                      <value>/home/hadoop/namenode</value>
+                                      </property>
+                                      Edit /opt/hadoop/etc/hadoop/mapred-site.xml on master.
+                                      
+                                      <configuration>
+                                       <property>
+                                         <name>mapreduce.framework.name</name>
+                                            <value>yarn</value> <!-- and not local (!) -->
+                                             </property>
+                                             </configuration>
+                                             Edit /opt/hadoop/etc/hadoop/yarn-site.xml – setup ResourceManager and NodeManagers:
+                                             
+                                             <configuration>
+                                             <property>
+                                                     <name>yarn.resourcemanager.hostname</name>
+                                                             <value>hmaster</value>
+                                                             </property>
+                                                             <property>
+                                                                     <name>yarn.nodemanager.hostname</name>
+                                                                             <value>hmaster</value> <!-- or hslave1, hslave2, hslave3 -->
+                                                                             </property>
+                                                                             <property>
+                                                                               <name>yarn.nodemanager.aux-services</name>
+                                                                                   <value>mapreduce_shuffle</value>
+                                                                                   </property>
+                                                                                   </configuration>
+                                                                                   Edit /opt/hadoop/etc/hadoop/slaves on master (so that master may start all necessary services on slaves automagically):
+                                                                                   
+                                                                                   hmaster
+                                                                                   hslave1
+                                                                                   hslave2
+                                                                                   hslave3
+                                                                                   Now the important step: disable firewall and IPv6 (Hadoop does not support IPv6 – problems with listening on all the interfaces via 0.0.0.0):
+                                                                                   
+                                                                                   # systemctl stop firewalld
+                                                                                   Add the following lines to /etc/sysctl.conf:
+                                                                                   
+                                                                                   net.ipv6.conf.all.disable_ipv6 = 1
+                                                                                   net.ipv6.conf.default.disable_ipv6 = 1
+                                                                                   Format NameNode:
+                                                                                   
+                                                                                   # su hadoop
+                                                                                   $ hdfs namenode -format
+                                                                                   Start HDFS (as user hadoop):
+                                                                                   
+                                                                                   $ start-dfs.sh
+                                                                                   Check out with jps if DataNode are running on slaves and if DataNode, NameNode, and SecondaryNameNode are running on master. Also try accessing http://hmaster:50070/
+                                                                                   
+                                                                                   Start YARN on master:
+                                                                                   
+                                                                                   $ start-yarn.sh 
