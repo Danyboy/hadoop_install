@@ -13,7 +13,6 @@ run_on_all_host(){
     done < $MYHOSTS
 }
 
-
 copy_keys(){
     # su hadoop
     ssh-keygen -t rsa
@@ -107,29 +106,38 @@ do
      esac
 done
 
-#Big comments
 #TODO
+#Config
+#systemd service
+#checking opt/hadoop, hosts
+
+#Big comments
 : <<'END'
 config_hadoop(){
 #On master:
 
-Edit /opt/hadoop/etc/hadoop/core-site.xml – set up NameNode URI on every node:
+#Edit /opt/hadoop/etc/hadoop/core-site.xml – set up NameNode URI on every node:
+master_node="hdfs://hmaster:9000/"
 
+cat <<EOF >/opt/hadoop/etc/hadoop/core-site.xml
 <configuration>
 <property>
     <name>fs.defaultFS</name>
-    <value>hdfs://hmaster:9000/</value>
+    <value>$master_node</value>
 </property>
 </configuration>
-Create HDFS DataNode data dirs on every node and change ownership of /opt/hadoop:
+EOF
 
-# chown hadoop /opt/hadoop/ -R
-# chgrp hadoop /opt/hadoop/ -R
-# mkdir /home/hadoop/datanode
-# chown hadoop /home/hadoop/datanode/
-# chgrp hadoop /home/hadoop/datanode/    
-Edit /opt/hadoop/etc/hadoop/hdfs-site.xml – set up DataNodes:
 
+#Create HDFS DataNode data dirs on every node and change ownership of /opt/hadoop:
+
+chown hadoop:hadoop /opt/hadoop/ -R
+mkdir /home/hadoop/datanode
+chown hadoop:hadoop /home/hadoop/datanode/
+
+#Edit /opt/hadoop/etc/hadoop/hdfs-site.xml – set up DataNodes:
+
+cat <<EOF >/opt/hadoop/etc/hadoop/hdfs-site.xml
 <configuration>
 <property>
   <name>dfs.replication</name>
@@ -144,27 +152,40 @@ Edit /opt/hadoop/etc/hadoop/hdfs-site.xml – set up DataNodes:
    <value>/home/hadoop/datanode</value>
 </property>
 </configuration>
-Create HDFS NameNode data dirs on master:
+EOF
+}
 
-# mkdir /home/hadoop/namenode
-# chown hadoop /home/hadoop/namenode/
-# chgrp hadoop /home/hadoop/namenode/    
-Edit /opt/hadoop/etc/hadoop/hdfs-site.xml on master. Add further properties:
+config_hadoop_master(){
 
+#Create HDFS NameNode data dirs on master:
+
+mkdir /home/hadoop/namenode
+chown hadoop:hadoop /home/hadoop/namenode/
+
+#Edit /opt/hadoop/etc/hadoop/hdfs-site.xml on master. Add further properties:
+
+cat <<EOF >/opt/hadoop/etc/hadoop/hdfs-site.xml
 <property>
         <name>dfs.namenode.data.dir</name>
         <value>/home/hadoop/namenode</value>
 </property>
-Edit /opt/hadoop/etc/hadoop/mapred-site.xml on master.
+EOF
 
+#Edit /opt/hadoop/etc/hadoop/mapred-site.xml on master.
+
+cat <<EOF >/opt/hadoop/etc/hadoop/mapred-site.xml
 <configuration>
  <property>
   <name>mapreduce.framework.name</name>
    <value>yarn</value> <!-- and not local (!) -->
  </property>
 </configuration>
-Edit /opt/hadoop/etc/hadoop/yarn-site.xml – setup ResourceManager and NodeManagers:
+EOF
 
+
+#Edit /opt/hadoop/etc/hadoop/yarn-site.xml – setup ResourceManager and NodeManagers:
+
+cat <<EOF >/opt/hadoop/etc/hadoop/yarn-site.xml
 <configuration>
 <property>
         <name>yarn.resourcemanager.hostname</name>
@@ -179,10 +200,12 @@ Edit /opt/hadoop/etc/hadoop/yarn-site.xml – setup ResourceManager and NodeMana
     <value>mapreduce_shuffle</value>
 </property>
 </configuration>
-Edit /opt/hadoop/etc/hadoop/slaves on master (so that master may start all necessary services on slaves automagically):
+EOF
+
 }
 
 start_hadoop(){
+Edit /opt/hadoop/etc/hadoop/slaves on master (so that master may start all necessary services on slaves automagically):
 hmaster
 hslave1
 hslave2
