@@ -2,96 +2,60 @@
 
 #http://www.rexamine.com/2015/02/installing-hadoop-2-6-0-on-centos-7/
 
-scriptdir=./
-myhosts=$scriptdir/hosts
+SCRIPTNAME="$(basename $0)"
+MYSCRIPTDIR=$(dirname "$0")
+[ "$MYSCRIPTDIR" = "." ] && MYSCRIPTDIR="$(pwd)"
+MYHOSTS=$MYSCRIPTDIR/hosts
 
-add_hosts(){
-    cat $myhosts >> /etc/hosts
+run_on_all_host(){
+    while read ip chost ; do 
+	ssh $chost sudo curl -s https://raw.githubusercontent.com/Danyboy/hadoop_install/master/hadoop_install | bash -s -a
+    done < $MYHOSTS
 }
 
-user_creation(){
-    hadoop_user="hadoop"
-    useradd $hadoop_user
-    passwd $hadoop_user
-}
 
 copy_keys(){
     # su hadoop
     ssh-keygen -t rsa
     chmod 0600 ~/.ssh/authorized_keys
 
-    for ip chost ; do 
-	ssh-copy-id -i ~/.ssh/id_rsa.pub hadoop@$chost
-    done << $myhosts
+    while read ip chost ; do 
+	ssh-copy-id -i ~/.ssh/id_rsa.pub $hadoop_user@$chost
+    done < $MYHOSTS
     
 #ssh-copy-id -i ~/.ssh/id_rsa.pub hadoop@hslave1
 #ssh-copy-id -i ~/.ssh/id_rsa.pub hadoop@hslave2
 }
 
-
-java_install(){
-Installing Oracle Java SDK
-
-Download latest Oracle JDK and save it in the /opt directory.
-
-On hmaster, unpack Java:
-
-# cd /opt
-# tar -zxf jdk-8u31-linux-x64.tar.gz
-# mv jdk1.8.0_31 jdk
-Now propagete /opt/jdk to all the slaves
-
-# scp -r jdk hslave1:/opt
-# scp -r jdk hslave2:/opt
-# scp -r jdk hslave3:/opt
-On each node, let’s use the alternatives tool to set up Oracle Java as the default Java framework.
-# alternatives --install /usr/bin/java java /opt/jdk/bin/java 2
-# alternatives --config java # select appropriate program (/opt/jdk/bin/java)
-# alternatives --install /usr/bin/jar jar /opt/jdk/bin/jar 2
-# alternatives --install /usr/bin/javac javac /opt/jdk/bin/javac 2
-# alternatives --set jar /opt/jdk/bin/jar
-# alternatives --set javac /opt/jdk/bin/javac 
-Check if everything is OK by executing java -version.
-
+add_hosts(){
+    cat $MYHOSTS >> /etc/hosts
 }
 
+user_creation(){
+    hadoop_user="hadoop"
+    useradd $hadoop_user
+    #passwd $hadoop_user
+}
 
-export_variables(){
-Set up environmental variables:
-# nano /etc/bashrc
-Add the following:
-
-export JAVA_HOME=/opt/jdk
-export JRE_HOME=/opt/jdk/jre
-export PATH=$PATH:/opt/jdk/bin:/opt/jdk/jre/bin
-And also possibly:
-
-alias ll='ls -l --color'
-alias cp='cp -i'
-alias mv='mv -i'
-alias rm='rm -i'
-Check if everyting is OK:
-
-# source /etc/bashrc
-# echo $JAVA_HOME
+java_install(){
+    yum install -y java-1.8.0-openjdk curl wget
 }
 
 install_hadoop(){
-Installing and configuring hadoop 2.6.0
-On master:
 
-# cd /opt
-# wget http://www.eu.apache.org/dist/hadoop/common/hadoop-2.6.0/hadoop-2.6.0.tar.gz
-# tar -zxf hadoop-2.6.0.tar.gz
-# rm hadoop-2.6.0.tar.gz
-# mv hadoop-2.6.0 hadoop
-Propagate /opt/hadoop to slave nodes:
+#Installing and configuring hadoop 2.6.0
+#On master:
 
-# scp -r hadoop hslave1:/opt
-# scp -r hadoop hslave2:/opt
-# scp -r hadoop hslave3:/opt
-Add the following lines to /home/hadoop/.bashrc on all the nodes (you may play with scp for that too):
+cd /opt
+wget http://www.eu.apache.org/dist/hadoop/common/hadoop-2.6.0/hadoop-2.6.0.tar.gz
+tar -zxf hadoop-2.6.0.tar.gz
+rm hadoop-2.6.0.tar.gz
+mv hadoop-2.6.0 hadoop
 
+#Propagate /opt/hadoop to slave nodes:
+#Run from hadoop or to hadoop user
+
+cat <<EOF >/home/$hadoop_user/.bashrc
 export HADOOP_PREFIX=/opt/hadoop
 export HADOOP_HOME=$HADOOP_PREFIX
 export HADOOP_COMMON_HOME=$HADOOP_PREFIX
@@ -100,32 +64,55 @@ export HADOOP_HDFS_HOME=$HADOOP_PREFIX
 export HADOOP_MAPRED_HOME=$HADOOP_PREFIX
 export HADOOP_YARN_HOME=$HADOOP_PREFIX
 export PATH=$PATH:$HADOOP_PREFIX/sbin:$HADOOP_PREFIX/bin
+EOF
 
 }
 
+usage(){
+    echo " $SCRIPTNAME -<i|h|a>"
+    echo " Intsall hadoop on hosts or current machine"
+    echo ""
+    echo " example: # $SCRIPTNAME -i # for install hadoop on current machine"
+    fatal
+}
+
+fatal()
+{
+        echo "$@" >&2
+        exit 1
+}
+
+while getopts “hia” OPTION 
+do
+     case $OPTION in
+         h)
+             usage
+             exit 1
+             ;;
+         i)
+	     add_hosts
+	     user_creation
+	     java_install
+	     install_hadoop
+             exit 1
+             ;;
+         ?)
+             usage
+             exit
+             ;;
+         *)
+             usage
+             exit
+             ;;
+     esac
+done
+
+#Big comments
+#TODO
+: <<'END'
 config_hadoop(){
-On master:
+#On master:
 
-# cd /opt
-# wget http://www.eu.apache.org/dist/hadoop/common/hadoop-2.6.0/hadoop-2.6.0.tar.gz
-# tar -zxf hadoop-2.6.0.tar.gz
-# rm hadoop-2.6.0.tar.gz
-# mv hadoop-2.6.0 hadoop
-Propagate /opt/hadoop to slave nodes:
-
-# scp -r hadoop hslave1:/opt
-# scp -r hadoop hslave2:/opt
-# scp -r hadoop hslave3:/opt
-Add the following lines to /home/hadoop/.bashrc on all the nodes (you may play with scp for that too):
-
-export HADOOP_PREFIX=/opt/hadoop
-export HADOOP_HOME=$HADOOP_PREFIX
-export HADOOP_COMMON_HOME=$HADOOP_PREFIX
-export HADOOP_CONF_DIR=$HADOOP_PREFIX/etc/hadoop
-export HADOOP_HDFS_HOME=$HADOOP_PREFIX
-export HADOOP_MAPRED_HOME=$HADOOP_PREFIX
-export HADOOP_YARN_HOME=$HADOOP_PREFIX
-export PATH=$PATH:$HADOOP_PREFIX/sbin:$HADOOP_PREFIX/bin
 Edit /opt/hadoop/etc/hadoop/core-site.xml – set up NameNode URI on every node:
 
 <configuration>
@@ -193,7 +180,9 @@ Edit /opt/hadoop/etc/hadoop/yarn-site.xml – setup ResourceManager and NodeMana
 </property>
 </configuration>
 Edit /opt/hadoop/etc/hadoop/slaves on master (so that master may start all necessary services on slaves automagically):
+}
 
+start_hadoop(){
 hmaster
 hslave1
 hslave2
@@ -235,3 +224,4 @@ If anything went wrong, check out /opt/hadoop/log/*.log. Good luck :)
 ‹ stringi 0.4-1 released – fast, portable, consistent character string processingUsing Hadoop Streaming API to perform a word count job in R and C++ ›
 Tagged with: CentOS, Hadoop, HDFS, YARN
 }
+END
