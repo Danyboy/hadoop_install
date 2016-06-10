@@ -1,21 +1,21 @@
 #!/bin/bash
 
-#http://www.rexamine.com/2015/02/installing-hadoop-2-6-0-on-centos-7/
-
 hadoop_user="hadoop"
 root_dir="/opt"
 hadoop_dir="${root_dir}/hadoop"
-master_name="$(hostname)"
-master_node="hdfs://$master_name:9000/" #master_node="hdfs://hmaster:9000/"
 
 SCRIPTNAME="$(basename $0)"
 MYSCRIPTDIR=$(dirname "$0")
 [ "$MYSCRIPTDIR" = "." ] && MYSCRIPTDIR="$(pwd)"
 MYHOSTS=$MYSCRIPTDIR/hosts
 VERBOSE=true
+[ "$EUID" = 0 ] && MYSUDO="" || MYSUDO="sudo"
+
 
 currenthost="$(hostname)"
 tmpdir="/tmp"
+master_name="$(cat ${MYHOSTS} | head -n1 | cut -f 2 -d " ")"
+master_node="hdfs://$master_name:9000/" #master_node="hdfs://hmaster:9000/"
 
 add_hosts(){
     my_echo "Host installing $currenthost"
@@ -26,9 +26,16 @@ add_hosts(){
 run_on_all_host(){
     [ ! -e "$MYHOSTS" ] && my_exit "Fatal, where is hosts file? $MYHOSTS"
     while read ip chost ; do 
+	my_echo "Copy script on $chost"
 	scp -r ${MYSCRIPTDIR} ${chost}:${tmpdir}/
-	ssh $chost sudo ${tmpdir}/${MYSCRIPTDIR}/${SCRIPTNAME} -i
-	#ssh $chost sudo 'bash /dev/stdin -i' <<< "curl -s https://raw.githubusercontent.com/Danyboy/hadoop_install/master/hadoop_install"
+	ssh -tt $chost sed -i.bak '/Defaults    requiretty/d' /etc/sudoers
+
+	#ssh $chost ${tmpdir}/$(basename ${MYSCRIPTDIR})/${SCRIPTNAME} -i
+	#ssh $chost yum install -y sudo #TODO disable
+	my_echo "Run script on $chost"
+	ssh -tt $chost ${MYSUDO} ${tmpdir}/${MYSCRIPTDIR}/${SCRIPTNAME} -i
+
+	#ssh $chost ${MYSUDO} 'bash /dev/stdin -i' <<< "curl -s https://raw.githubusercontent.com/Danyboy/hadoop_install/master/hadoop_install"
     done < <(cat $MYHOSTS)
 }
 
@@ -59,9 +66,9 @@ chmod 644 ${HOME}/.ssh/config
 copy_keys(){
     while read ip chost ; do
 	scp -r ~/.ssh/ ${chost}:${tmpdir}/
-	ssh ${chost} sudo cp -a ${tmpdir}/.ssh/ /home/$hadoop_user/
-	ssh ${chost} sudo chown -R $hadoop_user:$hadoop_user /home/$hadoop_user/
-	ssh ${chost} sudo rm -rf ${tmpdir}/.ssh
+	ssh -tt ${chost} ${MYSUDO} cp -a ${tmpdir}/.ssh/ /home/$hadoop_user/
+	ssh -tt ${chost} ${MYSUDO} chown -R $hadoop_user:$hadoop_user /home/$hadoop_user/
+	ssh -tt ${chost} ${MYSUDO} rm -rf ${tmpdir}/.ssh
     done < <(cat $MYHOSTS)
 }
 
@@ -85,7 +92,7 @@ install_hadoop(){
 	rm hadoop-2.6.0.tar.gz
 	mv hadoop-2.6.0 hadoop
     else
-	my_echo "Hadoop dir already exist, hadoop install canceled."
+	my_echo "Hadoop dir already exist, hadoop install skipped."
     fi
 
     #Run from hadoop or to hadoop user
@@ -175,6 +182,7 @@ cat <<EOF >${hadoop_dir}/etc/hadoop/mapred-site.xml
 </configuration>
 EOF
 
+#TODO check yarn config on slaves
 #Edit ${hadoop_dir}/etc/hadoop/yarn-site.xml – setup ResourceManager and NodeManagers:
 
 cat <<EOF >${hadoop_dir}/etc/hadoop/yarn-site.xml
@@ -198,31 +206,6 @@ EOF
 cat $MYHOSTS | cut -f 2 -d " " > ${hadoop_dir}/etc/hadoop/slaves
 
 }
-
-my_echo(){
-    $VERBOSE && echo "$1"
-}
-
-my_exit(){
-    $VERBOSE && echo "$1"
-    exit $RETVAL
-}
-
-usage(){
-    echo " $SCRIPTNAME -<i|h|a>"
-    echo " Intsall hadoop on hosts or on a current machine"
-    echo ""
-    echo " example: # $SCRIPTNAME -i # for install hadoop on current machine"
-    echo " example: # $SCRIPTNAME -a # for install hadoop on all machines in hosts file"
-    my_exit
-}
-
-my_start(){
-    #sudo su -c "${MYSCRIPTDIR}/${SCRIPTNAME} -s" ${hadoop_user}
-    #chmod a+rx "${MYSCRIPTDIR}/${SCRIPTNAME}"
-    su -c "${MYSCRIPTDIR}/${SCRIPTNAME} -r" - ${hadoop_user}
-}
-
 start_hadoop(){
 #Now the important step: disable firewall and IPv6 (Hadoop does not support IPv6 – problems with listening on all the interfaces via 0.0.0.0):
 
@@ -237,7 +220,7 @@ generate_key
 hdfs namenode -format
 
 #hadoop-env.sh
-#MYENV="/opt/hadoop/etc/hadoop/hadoop-env.sh"
+#MYENV="${hadoop_dir}/etc/hadoop/hadoop-env.sh"
 #chmod 755 $MYENV
 #$MYENV
 #Start HDFS (as user hadoop):
@@ -266,6 +249,50 @@ my_echo "Testing hadoop 2.6.0"
 #‹ stringi 0.4-1 released – fast, portable, consistent character string processingUsing Hadoop Streaming API to perform a word count job in R and C++ ›
 }
 
+enable_ssh(){
+    yum install -y openssh-clients openssh-server
+    ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -q -N ""
+    ssh-keygen -t ecdsa -f /etc/ssh/ssh_host_ecdsa_key -q -N ""
+    ssh-keygen -t rsa1 -f /etc/ssh/ssh_host_rsa_key -q -N ""
+    /usr/sbin/sshd -D &
+}
+
+pub_keys(){
+    cat ~/.ssh/id_rsa.pub >> /home/danil/Projects/bash/hadoop_conf/authorized_keys
+}
+
+copy_my_keys(){
+    cp /home/danil/Projects/bash/hadoop_conf/authorized_keys ~/.ssh/authorized_keys
+    chmod 600 ~/.ssh/authorized_keys
+    cat ~/.ssh/authorized_keys
+}
+
+
+my_echo(){
+    $VERBOSE && echo "$1"
+}
+
+my_exit(){
+    $VERBOSE && echo "$1"
+    exit $RETVAL
+}
+
+usage(){
+    echo " $SCRIPTNAME -<i|h|a>"
+    echo " Intsall hadoop on hosts or on a current machine"
+    echo ""
+    echo " example: # $SCRIPTNAME -i # for install hadoop on current machine"
+    echo " example: # $SCRIPTNAME -a # for install hadoop on all machines in hosts file"
+    my_exit
+}
+
+my_start(){
+    ${MYSUDO} su -c "${MYSCRIPTDIR}/${SCRIPTNAME} -s" ${hadoop_user}
+    
+    #chmod a+rx "${MYSCRIPTDIR}/${SCRIPTNAME}"
+    #su -c "${MYSCRIPTDIR}/${SCRIPTNAME} -r" - ${hadoop_user}
+}
+
 my_install(){
     add_hosts
     user_creation
@@ -277,15 +304,12 @@ my_install(){
 my_install_master(){
     my_install
     config_hadoop_master
-    ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -q -N ""
-    ssh-keygen -t ecdsa -f /etc/ssh/ssh_host_ecdsa_keyr -q -N ""
-    ssh-keygen -t rsa1 -f /etc/ssh/ssh_host_rsa_key -q -N ""
-    /usr/sbin/sshd -D &
+    enable_ssh #TODO disable or check
     generate_key
     my_start
 }
 
-while getopts “hiasrm” OPTION 
+while getopts “hiasrmegpcd” OPTION 
 do
      case $OPTION in
          h)
@@ -297,10 +321,11 @@ do
              exit 1
              ;;
          a)
-	     add_hosts
-	     run_on_all_host
-	     copy_keys
+	     add_hosts || my_exit "Hosts installation error."
+	     run_on_all_host #|| my_exit "Error Hadoop installation on slave hosts."
+	     copy_keys || my_exit "Ssh keys copy error."
 	     config_hadoop_master
+	     my_start
              exit 1
              ;;
          s)
@@ -313,6 +338,27 @@ do
              ;;
          m)
              my_install_master
+             exit 1
+             ;;
+         e)
+	     enable_ssh
+             exit 1
+             ;;
+         g)
+	     enable_ssh
+	     generate_key
+             exit 1
+             ;;
+         p)
+	     pub_keys
+             exit 1
+             ;;
+         c)
+	     copy_my_keys
+             exit 1
+             ;;
+         d)
+	     add_hosts
              exit 1
              ;;
          ?)
@@ -332,3 +378,5 @@ if [ $OPTIND -eq 1 ]; then usage; fi
 #Config
 #systemd service
 #checking opt/hadoop, hosts
+#http://www.rexamine.com/2015/02/installing-hadoop-2-6-0-on-centos-7/
+
