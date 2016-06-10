@@ -19,7 +19,7 @@ tmpdir="/tmp"
 
 add_hosts(){
     my_echo "Host installing $currenthost"
-    [ ! -e "$MYHOSTS" ] && my_echo "Error, where is hosts file? $MYHOSTS"
+    [ ! -e "$MYHOSTS" ] && my_echo "Error, where is hosts file? $MYHOSTS" && return 1
     cat $MYHOSTS >> /etc/hosts
 }
 
@@ -37,9 +37,21 @@ user_creation(){
     #passwd $hadoop_user
 }
 
+generate_key(){
+    ssh-keygen -t rsa -f ~/.ssh/id_rsa -q -N ""
+    cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+    chmod 600 ~/.ssh/authorized_keys
+
+cat <<EOF >> ~/.ssh/config
+
+Host *
+  UserKnownHostsFile /dev/null
+  StrictHostKeyChecking no
+EOF
+}
+
 copy_keys(){
     # su $hadoop_user
-    # ssh-keygen -t rsa
     # chmod 0600 ~/.ssh/authorized_keys
     #ssh-keygen -t ed25519
 
@@ -53,7 +65,7 @@ copy_keys(){
 
 java_install(){
     my_echo "Java installing $currenthost"
-    yum install -y java-1.8.0-openjdk curl wget
+    yum install -y java-1.8.0-openjdk java-1.8.0-openjdk-devel which openssh-clients openssh-server net-tools curl wget sudo mc 
 }
 
 install_hadoop(){
@@ -76,14 +88,15 @@ install_hadoop(){
     #Run from hadoop or to hadoop user
 
 cat <<EOF >>/home/$hadoop_user/.bashrc
+export JAVA_HOME=$(readlink -f /usr/bin/java | sed "s:/bin/java::")
 export HADOOP_PREFIX=${hadoop_dir}
-export HADOOP_HOME=$HADOOP_PREFIX
-export HADOOP_COMMON_HOME=$HADOOP_PREFIX
-export HADOOP_CONF_DIR=$HADOOP_PREFIX/etc/hadoop
-export HADOOP_HDFS_HOME=$HADOOP_PREFIX
-export HADOOP_MAPRED_HOME=$HADOOP_PREFIX
-export HADOOP_YARN_HOME=$HADOOP_PREFIX
-export PATH=$PATH:$HADOOP_PREFIX/sbin:$HADOOP_PREFIX/bin
+export HADOOP_HOME=\$HADOOP_PREFIX
+export HADOOP_COMMON_HOME=\$HADOOP_PREFIX
+export HADOOP_CONF_DIR=\$HADOOP_PREFIX/etc/hadoop
+export HADOOP_HDFS_HOME=\$HADOOP_PREFIX
+export HADOOP_MAPRED_HOME=\$HADOOP_PREFIX
+export HADOOP_YARN_HOME=\$HADOOP_PREFIX
+export PATH=\$PATH:\$HADOOP_PREFIX/sbin:\$HADOOP_PREFIX/bin
 EOF
 
 }
@@ -194,14 +207,80 @@ my_exit(){
 
 usage(){
     echo " $SCRIPTNAME -<i|h|a>"
-    echo " Intsall hadoop on hosts or current machine"
+    echo " Intsall hadoop on hosts or on a current machine"
     echo ""
     echo " example: # $SCRIPTNAME -i # for install hadoop on current machine"
     echo " example: # $SCRIPTNAME -a # for install hadoop on all machines in hosts file"
     my_exit
 }
 
-while getopts “hia” OPTION 
+my_start(){
+    #sudo su -c "${MYSCRIPTDIR}/${SCRIPTNAME} -s" ${hadoop_user}
+    #chmod a+rx "${MYSCRIPTDIR}/${SCRIPTNAME}"
+    su -c "${MYSCRIPTDIR}/${SCRIPTNAME} -r" - ${hadoop_user}
+}
+
+start_hadoop(){
+#Now the important step: disable firewall and IPv6 (Hadoop does not support IPv6 – problems with listening on all the interfaces via 0.0.0.0):
+
+# systemctl stop firewalld
+#Add the following lines to /etc/sysctl.conf:
+#net.ipv6.conf.all.disable_ipv6 = 1
+#net.ipv6.conf.default.disable_ipv6 = 1
+#Format NameNode:
+
+# su hadoop
+#hdfs namenode -format
+
+generate_key
+chmod 644 ~/.ssh/config
+#Start HDFS (as user hadoop):
+#hadoop-env.sh
+start-dfs.sh
+
+#Check out with jps if DataNode are running on slaves and if DataNode, NameNode, and SecondaryNameNode are running on master. Also try accessing http://hmaster:50070/
+#Start YARN on master:
+
+start-yarn.sh 
+
+#Now NodeManagers should be alive (jps) on all nodes and a ResourceManager on master too.
+#We see that the master node consists of a ResourceManager, NodeManager (YARN), NameNode and DataNode (HDFS). A slave node acts as both a NodeManager and a DataNode.
+}
+
+test_hadoop(){
+my_echo "Testing hadoop 2.6.0"
+
+#You may want to check out if you are able to copy a local file to HDFS and run the standalone Hadoop Hello World (i.e. wordcount) Job.
+
+#$ hdfs dfsadmin -safemode leave # ??????
+#$ hdfs dfs -mkdir /input
+#$ hdfs dfs -copyFromLocal test.txt /input
+#$ hdfs dfs -cat /input/test.txt | head
+#$ hadoop jar ${hadoop_dir}/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.6.0.jar wordcount /input/test.txt /output1
+#If anything went wrong, check out ${hadoop_dir}/log/*.log. Good luck :)
+#‹ stringi 0.4-1 released – fast, portable, consistent character string processingUsing Hadoop Streaming API to perform a word count job in R and C++ ›
+}
+
+my_install(){
+    add_hosts
+    user_creation
+    java_install
+    install_hadoop
+    config_hadoop
+}
+
+my_install_master(){
+    my_install
+    config_hadoop_maste
+    ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -q -N ""
+    ssh-keygen -t ecdsa -f /etc/ssh/ssh_host_ecdsa_keyr -q -N ""
+    ssh-keygen -t rsa1 -f /etc/ssh/ssh_host_rsa_key -q -N ""
+    /usr/sbin/sshd -D &
+    generate_key
+    my_start
+}
+
+while getopts “hiasrm” OPTION 
 do
      case $OPTION in
          h)
@@ -209,11 +288,7 @@ do
              exit 1
              ;;
          i)
-	     add_hosts
-	     user_creation
-	     java_install
-	     install_hadoop
-	     config_hadoop
+             my_install
              exit 1
              ;;
          a)
@@ -221,6 +296,18 @@ do
 	     run_on_all_host
 	     copy_keys
 	     config_hadoop_master
+             exit 1
+             ;;
+         s)
+             my_start
+             exit 1
+             ;;
+         r)
+             start_hadoop
+             exit 1
+             ;;
+         m)
+             my_install_master
              exit 1
              ;;
          ?)
@@ -238,44 +325,3 @@ done
 #Config
 #systemd service
 #checking opt/hadoop, hosts
-
-#Big comments
-: <<'END'
-start_hadoop(){
-#Now the important step: disable firewall and IPv6 (Hadoop does not support IPv6 – problems with listening on all the interfaces via 0.0.0.0):
-
-# systemctl stop firewalld
-#Add the following lines to /etc/sysctl.conf:
-#net.ipv6.conf.all.disable_ipv6 = 1
-#net.ipv6.conf.default.disable_ipv6 = 1
-#Format NameNode:
-
-# su hadoop
-$ hdfs namenode -format
-Start HDFS (as user hadoop):
-
-$ start-dfs.sh
-Check out with jps if DataNode are running on slaves and if DataNode, NameNode, and SecondaryNameNode are running on master. Also try accessing http://hmaster:50070/
-
-Start YARN on master:
-
-$ start-yarn.sh 
-Now NodeManagers should be alive (jps) on all nodes and a ResourceManager on master too.
-
-We see that the master node consists of a ResourceManager, NodeManager (YARN), NameNode and DataNode (HDFS). A slave node acts as both a NodeManager and a DataNode.
-
-Testing hadoop 2.6.0
-
-You may want to check out if you are able to copy a local file to HDFS and run the standalone Hadoop Hello World (i.e. wordcount) Job.
-
-$ hdfs dfsadmin -safemode leave # ??????
-$ hdfs dfs -mkdir /input
-$ hdfs dfs -copyFromLocal test.txt /input
-$ hdfs dfs -cat /input/test.txt | head
-$ hadoop jar ${hadoop_dir}/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.6.0.jar wordcount /input/test.txt /output1
-If anything went wrong, check out ${hadoop_dir}/log/*.log. Good luck :)
-
-‹ stringi 0.4-1 released – fast, portable, consistent character string processingUsing Hadoop Streaming API to perform a word count job in R and C++ ›
-Tagged with: CentOS, Hadoop, HDFS, YARN
-}
-END
