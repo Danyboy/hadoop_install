@@ -23,19 +23,31 @@ add_hosts(){
     cat $MYHOSTS >> /etc/hosts
 }
 
-run_on_all_host(){
-    [ ! -e "$MYHOSTS" ] && my_exit "Fatal, where is hosts file? $MYHOSTS"
-    while read ip chost ; do 
+install_on_host(){
+	
+	chost="$1"
+
 	my_echo "Copy script on $chost"
-	scp -r ${MYSCRIPTDIR} ${chost}:${tmpdir}/
-	ssh -tt $chost sed -i.bak '/Defaults    requiretty/d' /etc/sudoers
+	
+	ssh $chost mkdir -p ${tmpdir}/$(basename ${MYSCRIPTDIR})/
+	scp ${MYSCRIPTDIR}/${SCRIPTNAME} ${chost}:${tmpdir}/$(basename ${MYSCRIPTDIR})/
+	scp ${MYHOSTS} ${chost}:${tmpdir}/$(basename ${MYSCRIPTDIR})/
+
+	#ssh -tt $chost sed -i.bak '/Defaults    requiretty/d' /etc/sudoers
+
+	my_echo "Run script on $chost"
+	ssh $chost ${MYSUDO} ${tmpdir}/$(basename ${MYSCRIPTDIR})/${SCRIPTNAME} -i
 
 	#ssh $chost ${tmpdir}/$(basename ${MYSCRIPTDIR})/${SCRIPTNAME} -i
 	#ssh $chost yum install -y sudo #TODO disable
-	my_echo "Run script on $chost"
-	ssh -tt $chost ${MYSUDO} ${tmpdir}/${MYSCRIPTDIR}/${SCRIPTNAME} -i
 
 	#ssh $chost ${MYSUDO} 'bash /dev/stdin -i' <<< "curl -s https://raw.githubusercontent.com/Danyboy/hadoop_install/master/hadoop_install"
+}
+
+run_on_all_host(){
+    [ ! -e "$MYHOSTS" ] && my_exit "Fatal, where is hosts file? $MYHOSTS"
+    while read ip chost ; do 
+	install_on_host $chost &
     done < <(cat $MYHOSTS)
 }
 
@@ -63,19 +75,25 @@ EOF
 chmod 644 ${HOME}/.ssh/config
 }
 
+copy_key(){
+	chost="$1"
+
+	scp -r ~/.ssh/ ${chost}:${tmpdir}/
+	ssh ${chost} ${MYSUDO} cp -a ${tmpdir}/.ssh/ /home/$hadoop_user/
+	ssh ${chost} ${MYSUDO} chown -R $hadoop_user:$hadoop_user /home/$hadoop_user/
+	#ssh ${chost} ${MYSUDO} rm -rf ${tmpdir}/.ssh
+}
+
 copy_keys(){
     while read ip chost ; do
-	scp -r ~/.ssh/ ${chost}:${tmpdir}/
-	ssh -tt ${chost} ${MYSUDO} cp -a ${tmpdir}/.ssh/ /home/$hadoop_user/
-	ssh -tt ${chost} ${MYSUDO} chown -R $hadoop_user:$hadoop_user /home/$hadoop_user/
-	ssh -tt ${chost} ${MYSUDO} rm -rf ${tmpdir}/.ssh
+	copy_key $chost &
+	#sleep 10
     done < <(cat $MYHOSTS)
 }
 
 java_install(){
     my_echo "Java installing $currenthost"
-    yum install -y java-1.8.0-openjdk java-1.8.0-openjdk-devel which openssh-clients openssh-server net-tools sudo mc wget
-    #curl wget 
+    yum install -y -q java-1.8.0-openjdk java-1.8.0-openjdk-devel which openssh-clients openssh-server net-tools sudo mc wget
 }
 
 install_hadoop(){
@@ -87,7 +105,7 @@ install_hadoop(){
 
     if [ ! -e "${hadoop_dir}" ] ; then
         cd ${root_dir}
-	wget http://www.eu.apache.org/dist/hadoop/common/hadoop-2.6.0/hadoop-2.6.0.tar.gz
+	wget -q http://www.eu.apache.org/dist/hadoop/common/hadoop-2.6.0/hadoop-2.6.0.tar.gz
     	tar -zxf hadoop-2.6.0.tar.gz
 	rm hadoop-2.6.0.tar.gz
 	mv hadoop-2.6.0 hadoop
@@ -114,6 +132,7 @@ EOF
 config_hadoop(){
 
 my_echo "Configure hadoop $currenthost"
+#[ -e "${hadoop_dir}" ] && my_echo "Hadoop dir already exists, hadoop configuration skipped." && return 0
 
 #Edit ${hadoop_dir}/etc/hadoop/core-site.xml – set up NameNode URI on every node:
 
@@ -128,6 +147,7 @@ EOF
 
 #Create HDFS DataNode data dirs on every node and change ownership of ${hadoop_dir}:
 
+mkdir -p ${hadoop_dir}/logs
 chown $hadoop_user:$hadoop_user ${hadoop_dir}/ -R
 mkdir /home/$hadoop_user/datanode
 chown $hadoop_user:$hadoop_user /home/$hadoop_user/datanode/
@@ -206,6 +226,7 @@ EOF
 cat $MYHOSTS | cut -f 2 -d " " > ${hadoop_dir}/etc/hadoop/slaves
 
 }
+
 start_hadoop(){
 #Now the important step: disable firewall and IPv6 (Hadoop does not support IPv6 – problems with listening on all the interfaces via 0.0.0.0):
 
@@ -270,6 +291,7 @@ copy_my_keys(){
 
 my_echo(){
     $VERBOSE && echo "$1"
+    echo $1 >> /tmp/${SCRIPTNAME}.log
 }
 
 my_exit(){
@@ -309,7 +331,7 @@ my_install_master(){
     my_start
 }
 
-while getopts “hiasrmegpcd” OPTION 
+while getopts “hiasrmegpckd” OPTION 
 do
      case $OPTION in
          h)
@@ -321,10 +343,11 @@ do
              exit 1
              ;;
          a)
-	     add_hosts || my_exit "Hosts installation error."
+	     add_hosts #|| my_exit "Hosts installation error."
 	     run_on_all_host #|| my_exit "Error Hadoop installation on slave hosts."
-	     copy_keys || my_exit "Ssh keys copy error."
+	     my_install #hack
 	     config_hadoop_master
+	     copy_keys || my_exit "Ssh keys copy error." #TODO enable
 	     my_start
              exit 1
              ;;
@@ -347,6 +370,7 @@ do
          g)
 	     enable_ssh
 	     generate_key
+	     pub_keys
              exit 1
              ;;
          p)
@@ -355,6 +379,10 @@ do
              ;;
          c)
 	     copy_my_keys
+             exit 1
+             ;;
+         k)
+	     copy_keys
              exit 1
              ;;
          d)
@@ -379,4 +407,3 @@ if [ $OPTIND -eq 1 ]; then usage; fi
 #systemd service
 #checking opt/hadoop, hosts
 #http://www.rexamine.com/2015/02/installing-hadoop-2-6-0-on-centos-7/
-
