@@ -8,42 +8,47 @@ hadoop_dir="${root_dir}/hadoop"
 master_name="$(hostname)"
 master_node="hdfs://$master_name:9000/" #master_node="hdfs://hmaster:9000/"
 
-
 SCRIPTNAME="$(basename $0)"
 MYSCRIPTDIR=$(dirname "$0")
 [ "$MYSCRIPTDIR" = "." ] && MYSCRIPTDIR="$(pwd)"
 MYHOSTS=$MYSCRIPTDIR/hosts
 VERBOSE=true
 
-run_on_all_host(){
-    [ ! -e "$MYHOSTS" ] && my_exit "Fatal, where is hosts file? $MYHOSTS"
-    while read ip chost ; do 
-	ssh $chost sudo curl -s https://raw.githubusercontent.com/Danyboy/hadoop_install/master/hadoop_install | bash /dev/stdin -i
-    done < <(cat $MYHOSTS)
-}
-
-copy_keys(){
-    # su $hadoop_user
-    ssh-keygen -t rsa
-    chmod 0600 ~/.ssh/authorized_keys
-
-    while read ip chost ; do 
-	ssh-copy-id -i ~/.ssh/id_rsa.pub $hadoop_user@$chost
-    done < <(cat $MYHOSTS)
-    
-#ssh-copy-id -i ~/.ssh/id_rsa.pub hadoop@hslave1
-#ssh-copy-id -i ~/.ssh/id_rsa.pub hadoop@hslave2
-}
+currenthost="$(hostname)"
+tmpdir="/tmp"
 
 add_hosts(){
     my_echo "Host installing $currenthost"
-    [ ! -e "$MYHOSTS" ] && my_exit "Fatal, where is hosts file? $MYHOSTS"
+    [ ! -e "$MYHOSTS" ] && my_echo "Error, where is hosts file? $MYHOSTS"
     cat $MYHOSTS >> /etc/hosts
+}
+
+run_on_all_host(){
+    [ ! -e "$MYHOSTS" ] && my_exit "Fatal, where is hosts file? $MYHOSTS"
+    while read ip chost ; do 
+	scp -r ${MYSCRIPTDIR} ${chost}:${tmpdir}/
+	ssh $chost sudo ${tmpdir}/${MYSCRIPTDIR}/${SCRIPTNAME} -i
+	#ssh $chost sudo 'bash /dev/stdin -i' <<< "curl -s https://raw.githubusercontent.com/Danyboy/hadoop_install/master/hadoop_install"
+    done < <(cat $MYHOSTS)
 }
 
 user_creation(){
     useradd $hadoop_user
     #passwd $hadoop_user
+}
+
+copy_keys(){
+    # su $hadoop_user
+    # ssh-keygen -t rsa
+    # chmod 0600 ~/.ssh/authorized_keys
+    #ssh-keygen -t ed25519
+
+    while read ip chost ; do
+	scp -r ~/.ssh/ ${chost}:${tmpdir}/
+	ssh ${chost} sudo cp -a ${tmpdir}/.ssh/ /home/$hadoop_user/
+	ssh ${chost} sudo chown -R $hadoop_user:$hadoop_user /home/$hadoop_user/
+	ssh ${chost} sudo rm -rf ${tmpdir}/.ssh
+    done < <(cat $MYHOSTS)
 }
 
 java_install(){
@@ -53,24 +58,22 @@ java_install(){
 
 install_hadoop(){
 
-my_echo "Hadoop installing $currenthost"
+    my_echo "Hadoop installing $currenthost"
 
-#Installing and configuring hadoop 2.6.0
-#On master:
+    #Installing and configuring hadoop 2.6.0
+    #On master:
 
+    if [ ! -e "${hadoop_dir}" ] ; then
+        cd ${root_dir}
+	wget http://www.eu.apache.org/dist/hadoop/common/hadoop-2.6.0/hadoop-2.6.0.tar.gz
+    	tar -zxf hadoop-2.6.0.tar.gz
+	rm hadoop-2.6.0.tar.gz
+	mv hadoop-2.6.0 hadoop
+    else
+	my_echo "Hadoop dir already exist, hadoop install canceled."
+    fi
 
-if [ ! -e "${hadoop_dir}" ] ; then
-cd ${root_dir}
-wget http://www.eu.apache.org/dist/hadoop/common/hadoop-2.6.0/hadoop-2.6.0.tar.gz
-tar -zxf hadoop-2.6.0.tar.gz
-rm hadoop-2.6.0.tar.gz
-mv hadoop-2.6.0 hadoop
-else
-my_echo "Hadoop dir already exist, hadoop install canceled."
-fi
-
-#Propagate ${hadoop_dir} to slave nodes:
-#Run from hadoop or to hadoop user
+    #Run from hadoop or to hadoop user
 
 cat <<EOF >>/home/$hadoop_user/.bashrc
 export HADOOP_PREFIX=${hadoop_dir}
@@ -86,7 +89,6 @@ EOF
 }
 
 config_hadoop(){
-currenthost="$(hostname)"
 
 my_echo "Configure hadoop $currenthost"
 
@@ -195,6 +197,7 @@ usage(){
     echo " Intsall hadoop on hosts or current machine"
     echo ""
     echo " example: # $SCRIPTNAME -i # for install hadoop on current machine"
+    echo " example: # $SCRIPTNAME -a # for install hadoop on all machines in hosts file"
     my_exit
 }
 
@@ -210,6 +213,14 @@ do
 	     user_creation
 	     java_install
 	     install_hadoop
+	     config_hadoop
+             exit 1
+             ;;
+         a)
+	     add_hosts
+	     run_on_all_host
+	     copy_keys
+	     config_hadoop_master
              exit 1
              ;;
          ?)
