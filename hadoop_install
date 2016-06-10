@@ -11,7 +11,6 @@ MYHOSTS=$MYSCRIPTDIR/hosts
 VERBOSE=true
 [ "$EUID" = 0 ] && MYSUDO="" || MYSUDO="sudo"
 
-
 currenthost="$(hostname)"
 tmpdir="/tmp"
 master_name="$(cat ${MYHOSTS} | head -n1 | cut -f 2 -d " ")"
@@ -33,15 +32,8 @@ install_on_host(){
 	scp ${MYSCRIPTDIR}/${SCRIPTNAME} ${chost}:${tmpdir}/$(basename ${MYSCRIPTDIR})/
 	scp ${MYHOSTS} ${chost}:${tmpdir}/$(basename ${MYSCRIPTDIR})/
 
-	#ssh -tt $chost sed -i.bak '/Defaults    requiretty/d' /etc/sudoers
-
 	my_echo "Run script on $chost"
 	ssh -tt $chost ${MYSUDO} ${tmpdir}/$(basename ${MYSCRIPTDIR})/${SCRIPTNAME} -i
-
-	#ssh $chost ${tmpdir}/$(basename ${MYSCRIPTDIR})/${SCRIPTNAME} -i
-	#ssh $chost yum install -y sudo #TODO disable
-
-	#ssh $chost ${MYSUDO} 'bash /dev/stdin -i' <<< "curl -s https://raw.githubusercontent.com/Danyboy/hadoop_install/master/hadoop_install"
 }
 
 run_on_all_host(){
@@ -53,7 +45,6 @@ run_on_all_host(){
 
 user_creation(){
     useradd $hadoop_user
-    #passwd $hadoop_user
 }
 
 generate_key(){
@@ -81,13 +72,11 @@ copy_key(){
 	scp -r ~/.ssh/ ${chost}:${tmpdir}/
 	ssh -tt ${chost} ${MYSUDO} cp -a ${tmpdir}/.ssh/ /home/$hadoop_user/
 	ssh -tt ${chost} ${MYSUDO} chown -R $hadoop_user:$hadoop_user /home/$hadoop_user/
-	#ssh ${chost} ${MYSUDO} rm -rf ${tmpdir}/.ssh
 }
 
 copy_keys(){
     while read ip chost ; do
 	copy_key $chost &
-	#sleep 10
     done < <(cat $MYHOSTS)
 }
 
@@ -228,22 +217,11 @@ cat $MYHOSTS | cut -f 2 -d " " > ${hadoop_dir}/etc/hadoop/slaves
 }
 
 start_hadoop(){
-#Now the important step: disable firewall and IPv6 (Hadoop does not support IPv6 – problems with listening on all the interfaces via 0.0.0.0):
-
-# systemctl stop firewalld
-#Add the following lines to /etc/sysctl.conf:
-#net.ipv6.conf.all.disable_ipv6 = 1
-#net.ipv6.conf.default.disable_ipv6 = 1
-
 generate_key
 
 #Format NameNode:
 hdfs namenode -format
 
-#hadoop-env.sh
-#MYENV="${hadoop_dir}/etc/hadoop/hadoop-env.sh"
-#chmod 755 $MYENV
-#$MYENV
 #Start HDFS (as user hadoop):
 start-dfs.sh
 
@@ -310,9 +288,6 @@ usage(){
 
 my_start(){
     ${MYSUDO} su -c "${MYSCRIPTDIR}/${SCRIPTNAME} -s" ${hadoop_user}
-    
-    #chmod a+rx "${MYSCRIPTDIR}/${SCRIPTNAME}"
-    #su -c "${MYSCRIPTDIR}/${SCRIPTNAME} -r" - ${hadoop_user}
 }
 
 my_install(){
