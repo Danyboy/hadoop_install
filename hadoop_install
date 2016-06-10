@@ -38,23 +38,25 @@ user_creation(){
 }
 
 generate_key(){
-    ssh-keygen -t rsa -f ~/.ssh/id_rsa -q -N ""
-    cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
-    chmod 600 ~/.ssh/authorized_keys
+    MYKEY="${HOME}/.ssh/id_rsa"
+    MYAUTH="${HOME}/.ssh/authorized_keys"
 
-cat <<EOF >> ~/.ssh/config
+    [ -e "$MYKEY" ] && [ -e "$MYAUTH" ] && my_echo "SSH keys already exists." && return 0
+    ssh-keygen -t rsa -f ${MYKEY} -q -N ""
+    cat ${MYKEY}.pub >> ${MYAUTH}
+    chmod 600 ${MYAUTH}
+
+cat <<EOF >> ${HOME}/.ssh/config
 
 Host *
   UserKnownHostsFile /dev/null
   StrictHostKeyChecking no
 EOF
+
+chmod 644 ${HOME}/.ssh/config
 }
 
 copy_keys(){
-    # su $hadoop_user
-    # chmod 0600 ~/.ssh/authorized_keys
-    #ssh-keygen -t ed25519
-
     while read ip chost ; do
 	scp -r ~/.ssh/ ${chost}:${tmpdir}/
 	ssh ${chost} sudo cp -a ${tmpdir}/.ssh/ /home/$hadoop_user/
@@ -65,7 +67,8 @@ copy_keys(){
 
 java_install(){
     my_echo "Java installing $currenthost"
-    yum install -y java-1.8.0-openjdk java-1.8.0-openjdk-devel which openssh-clients openssh-server net-tools curl wget sudo mc 
+    yum install -y java-1.8.0-openjdk java-1.8.0-openjdk-devel which openssh-clients openssh-server net-tools sudo mc wget
+    #curl wget 
 }
 
 install_hadoop(){
@@ -227,15 +230,17 @@ start_hadoop(){
 #Add the following lines to /etc/sysctl.conf:
 #net.ipv6.conf.all.disable_ipv6 = 1
 #net.ipv6.conf.default.disable_ipv6 = 1
-#Format NameNode:
-
-# su hadoop
-#hdfs namenode -format
 
 generate_key
-chmod 644 ~/.ssh/config
-#Start HDFS (as user hadoop):
+
+#Format NameNode:
+hdfs namenode -format
+
 #hadoop-env.sh
+#MYENV="/opt/hadoop/etc/hadoop/hadoop-env.sh"
+#chmod 755 $MYENV
+#$MYENV
+#Start HDFS (as user hadoop):
 start-dfs.sh
 
 #Check out with jps if DataNode are running on slaves and if DataNode, NameNode, and SecondaryNameNode are running on master. Also try accessing http://hmaster:50070/
@@ -271,7 +276,7 @@ my_install(){
 
 my_install_master(){
     my_install
-    config_hadoop_maste
+    config_hadoop_master
     ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -q -N ""
     ssh-keygen -t ecdsa -f /etc/ssh/ssh_host_ecdsa_keyr -q -N ""
     ssh-keygen -t rsa1 -f /etc/ssh/ssh_host_rsa_key -q -N ""
@@ -320,6 +325,8 @@ do
              ;;
      esac
 done
+
+if [ $OPTIND -eq 1 ]; then usage; fi
 
 #TODO
 #Config
