@@ -2,60 +2,78 @@
 
 #http://www.rexamine.com/2015/02/installing-hadoop-2-6-0-on-centos-7/
 
+hadoop_user="hadoop"
+root_dir="/opt"
+hadoop_dir="${root_dir}/hadoop"
+master_name="$(hostname)"
+master_node="hdfs://$master_name:9000/" #master_node="hdfs://hmaster:9000/"
+
+
 SCRIPTNAME="$(basename $0)"
 MYSCRIPTDIR=$(dirname "$0")
 [ "$MYSCRIPTDIR" = "." ] && MYSCRIPTDIR="$(pwd)"
 MYHOSTS=$MYSCRIPTDIR/hosts
+VERBOSE=true
 
 run_on_all_host(){
+    [ ! -e "$MYHOSTS" ] && my_exit "Fatal, where is hosts file? $MYHOSTS"
     while read ip chost ; do 
-	ssh $chost sudo curl -s https://raw.githubusercontent.com/Danyboy/hadoop_install/master/hadoop_install | bash -s -a
-    done < $MYHOSTS
+	ssh $chost sudo curl -s https://raw.githubusercontent.com/Danyboy/hadoop_install/master/hadoop_install | bash /dev/stdin -i
+    done < <(cat $MYHOSTS)
 }
 
 copy_keys(){
-    # su hadoop
+    # su $hadoop_user
     ssh-keygen -t rsa
     chmod 0600 ~/.ssh/authorized_keys
 
     while read ip chost ; do 
 	ssh-copy-id -i ~/.ssh/id_rsa.pub $hadoop_user@$chost
-    done < $MYHOSTS
+    done < <(cat $MYHOSTS)
     
 #ssh-copy-id -i ~/.ssh/id_rsa.pub hadoop@hslave1
 #ssh-copy-id -i ~/.ssh/id_rsa.pub hadoop@hslave2
 }
 
 add_hosts(){
+    my_echo "Host installing $currenthost"
+    [ ! -e "$MYHOSTS" ] && my_exit "Fatal, where is hosts file? $MYHOSTS"
     cat $MYHOSTS >> /etc/hosts
 }
 
 user_creation(){
-    hadoop_user="hadoop"
     useradd $hadoop_user
     #passwd $hadoop_user
 }
 
 java_install(){
+    my_echo "Java installing $currenthost"
     yum install -y java-1.8.0-openjdk curl wget
 }
 
 install_hadoop(){
 
+my_echo "Hadoop installing $currenthost"
+
 #Installing and configuring hadoop 2.6.0
 #On master:
 
-cd /opt
+
+if [ ! -e "${hadoop_dir}" ] ; then
+cd ${root_dir}
 wget http://www.eu.apache.org/dist/hadoop/common/hadoop-2.6.0/hadoop-2.6.0.tar.gz
 tar -zxf hadoop-2.6.0.tar.gz
 rm hadoop-2.6.0.tar.gz
 mv hadoop-2.6.0 hadoop
+else
+my_echo "Hadoop dir already exist, hadoop install canceled."
+fi
 
-#Propagate /opt/hadoop to slave nodes:
+#Propagate ${hadoop_dir} to slave nodes:
 #Run from hadoop or to hadoop user
 
-cat <<EOF >/home/$hadoop_user/.bashrc
-export HADOOP_PREFIX=/opt/hadoop
+cat <<EOF >>/home/$hadoop_user/.bashrc
+export HADOOP_PREFIX=${hadoop_dir}
 export HADOOP_HOME=$HADOOP_PREFIX
 export HADOOP_COMMON_HOME=$HADOOP_PREFIX
 export HADOOP_CONF_DIR=$HADOOP_PREFIX/etc/hadoop
@@ -67,18 +85,117 @@ EOF
 
 }
 
+config_hadoop(){
+currenthost="$(hostname)"
+
+my_echo "Configure hadoop $currenthost"
+
+#Edit ${hadoop_dir}/etc/hadoop/core-site.xml – set up NameNode URI on every node:
+
+cat <<EOF >${hadoop_dir}/etc/hadoop/core-site.xml
+<configuration>
+<property>
+    <name>fs.defaultFS</name>
+    <value>$master_node</value>
+</property>
+</configuration>
+EOF
+
+#Create HDFS DataNode data dirs on every node and change ownership of ${hadoop_dir}:
+
+chown $hadoop_user:$hadoop_user ${hadoop_dir}/ -R
+mkdir /home/$hadoop_user/datanode
+chown $hadoop_user:$hadoop_user /home/$hadoop_user/datanode/
+
+#Edit ${hadoop_dir}/etc/hadoop/hdfs-site.xml – set up DataNodes:
+
+cat <<EOF >${hadoop_dir}/etc/hadoop/hdfs-site.xml
+<configuration>
+<property>
+  <name>dfs.replication</name>
+  <value>3</value>
+</property>
+<property>
+  <name>dfs.permissions</name>
+  <value>false</value>
+</property>
+<property>
+   <name>dfs.datanode.data.dir</name>
+   <value>/home/$hadoop_user/datanode</value>
+</property>
+</configuration>
+EOF
+}
+
+config_hadoop_master(){
+my_echo "Configure hadoop master $currenthost"
+
+#Create HDFS NameNode data dirs on master:
+
+mkdir /home/$hadoop_user/namenode
+chown $hadoop_user:$hadoop_user /home/$hadoop_user/namenode/
+
+#Edit ${hadoop_dir}/etc/hadoop/hdfs-site.xml on master. Add further properties:
+
+cat <<EOF >${hadoop_dir}/etc/hadoop/hdfs-site.xml
+<configuration>
+<property>
+        <name>dfs.namenode.data.dir</name>
+        <value>/home/$hadoop_user/namenode</value>
+</property>
+</configuration>
+EOF
+
+#Edit ${hadoop_dir}/etc/hadoop/mapred-site.xml on master.
+
+cat <<EOF >${hadoop_dir}/etc/hadoop/mapred-site.xml
+<configuration>
+ <property>
+  <name>mapreduce.framework.name</name>
+   <value>yarn</value> <!-- and not local (!) -->
+ </property>
+</configuration>
+EOF
+
+#Edit ${hadoop_dir}/etc/hadoop/yarn-site.xml – setup ResourceManager and NodeManagers:
+
+cat <<EOF >${hadoop_dir}/etc/hadoop/yarn-site.xml
+<configuration>
+<property>
+        <name>yarn.resourcemanager.hostname</name>
+        <value>${master_name}</value>
+</property>
+<property>
+        <name>yarn.nodemanager.hostname</name>
+        <value>${master_name}</value> <!-- or hslave1, hslave2, hslave3 -->
+</property>
+<property>
+  <name>yarn.nodemanager.aux-services</name>
+    <value>mapreduce_shuffle</value>
+</property>
+</configuration>
+EOF
+
+#Edit ${hadoop_dir}/etc/hadoop/slaves on master (so that master may start all necessary services on slaves automagically):
+cat $MYHOSTS | cut -f 2 -d " " > ${hadoop_dir}/etc/hadoop/slaves
+
+}
+
+my_echo(){
+    $VERBOSE && echo "$1"
+}
+
+my_exit(){
+    $VERBOSE && echo "$1"
+    exit $RETVAL
+}
+
 usage(){
     echo " $SCRIPTNAME -<i|h|a>"
     echo " Intsall hadoop on hosts or current machine"
     echo ""
     echo " example: # $SCRIPTNAME -i # for install hadoop on current machine"
-    fatal
-}
-
-fatal()
-{
-        echo "$@" >&2
-        exit 1
+    my_exit
 }
 
 while getopts “hia” OPTION 
@@ -113,111 +230,14 @@ done
 
 #Big comments
 : <<'END'
-config_hadoop(){
-#On master:
-
-#Edit /opt/hadoop/etc/hadoop/core-site.xml – set up NameNode URI on every node:
-master_node="hdfs://hmaster:9000/"
-
-cat <<EOF >/opt/hadoop/etc/hadoop/core-site.xml
-<configuration>
-<property>
-    <name>fs.defaultFS</name>
-    <value>$master_node</value>
-</property>
-</configuration>
-EOF
-
-
-#Create HDFS DataNode data dirs on every node and change ownership of /opt/hadoop:
-
-chown hadoop:hadoop /opt/hadoop/ -R
-mkdir /home/hadoop/datanode
-chown hadoop:hadoop /home/hadoop/datanode/
-
-#Edit /opt/hadoop/etc/hadoop/hdfs-site.xml – set up DataNodes:
-
-cat <<EOF >/opt/hadoop/etc/hadoop/hdfs-site.xml
-<configuration>
-<property>
-  <name>dfs.replication</name>
-  <value>3</value>
-</property>
-<property>
-  <name>dfs.permissions</name>
-  <value>false</value>
-</property>
-<property>
-   <name>dfs.datanode.data.dir</name>
-   <value>/home/hadoop/datanode</value>
-</property>
-</configuration>
-EOF
-}
-
-config_hadoop_master(){
-
-#Create HDFS NameNode data dirs on master:
-
-mkdir /home/hadoop/namenode
-chown hadoop:hadoop /home/hadoop/namenode/
-
-#Edit /opt/hadoop/etc/hadoop/hdfs-site.xml on master. Add further properties:
-
-cat <<EOF >/opt/hadoop/etc/hadoop/hdfs-site.xml
-<property>
-        <name>dfs.namenode.data.dir</name>
-        <value>/home/hadoop/namenode</value>
-</property>
-EOF
-
-#Edit /opt/hadoop/etc/hadoop/mapred-site.xml on master.
-
-cat <<EOF >/opt/hadoop/etc/hadoop/mapred-site.xml
-<configuration>
- <property>
-  <name>mapreduce.framework.name</name>
-   <value>yarn</value> <!-- and not local (!) -->
- </property>
-</configuration>
-EOF
-
-
-#Edit /opt/hadoop/etc/hadoop/yarn-site.xml – setup ResourceManager and NodeManagers:
-
-cat <<EOF >/opt/hadoop/etc/hadoop/yarn-site.xml
-<configuration>
-<property>
-        <name>yarn.resourcemanager.hostname</name>
-        <value>hmaster</value>
-</property>
-<property>
-        <name>yarn.nodemanager.hostname</name>
-        <value>hmaster</value> <!-- or hslave1, hslave2, hslave3 -->
-</property>
-<property>
-  <name>yarn.nodemanager.aux-services</name>
-    <value>mapreduce_shuffle</value>
-</property>
-</configuration>
-EOF
-
-}
-
 start_hadoop(){
-Edit /opt/hadoop/etc/hadoop/slaves on master (so that master may start all necessary services on slaves automagically):
-hmaster
-hslave1
-hslave2
-hslave3
-Now the important step: disable firewall and IPv6 (Hadoop does not support IPv6 – problems with listening on all the interfaces via 0.0.0.0):
+#Now the important step: disable firewall and IPv6 (Hadoop does not support IPv6 – problems with listening on all the interfaces via 0.0.0.0):
 
 # systemctl stop firewalld
-Add the following lines to /etc/sysctl.conf:
-
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
-Format NameNode:
+#Add the following lines to /etc/sysctl.conf:
+#net.ipv6.conf.all.disable_ipv6 = 1
+#net.ipv6.conf.default.disable_ipv6 = 1
+#Format NameNode:
 
 # su hadoop
 $ hdfs namenode -format
@@ -241,8 +261,8 @@ $ hdfs dfsadmin -safemode leave # ??????
 $ hdfs dfs -mkdir /input
 $ hdfs dfs -copyFromLocal test.txt /input
 $ hdfs dfs -cat /input/test.txt | head
-$ hadoop jar /opt/hadoop/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.6.0.jar wordcount /input/test.txt /output1
-If anything went wrong, check out /opt/hadoop/log/*.log. Good luck :)
+$ hadoop jar ${hadoop_dir}/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.6.0.jar wordcount /input/test.txt /output1
+If anything went wrong, check out ${hadoop_dir}/log/*.log. Good luck :)
 
 ‹ stringi 0.4-1 released – fast, portable, consistent character string processingUsing Hadoop Streaming API to perform a word count job in R and C++ ›
 Tagged with: CentOS, Hadoop, HDFS, YARN
