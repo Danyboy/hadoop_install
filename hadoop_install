@@ -29,14 +29,14 @@ install_on_host(){
 
 	my_echo "Copy script on $chost"
 	
-	ssh $chost mkdir -p ${tmpdir}/$(basename ${MYSCRIPTDIR})/
+	ssh -tt $chost mkdir -p ${tmpdir}/$(basename ${MYSCRIPTDIR})/
 	scp ${MYSCRIPTDIR}/${SCRIPTNAME} ${chost}:${tmpdir}/$(basename ${MYSCRIPTDIR})/
 	scp ${MYHOSTS} ${chost}:${tmpdir}/$(basename ${MYSCRIPTDIR})/
 
 	#ssh -tt $chost sed -i.bak '/Defaults    requiretty/d' /etc/sudoers
 
 	my_echo "Run script on $chost"
-	ssh $chost ${MYSUDO} ${tmpdir}/$(basename ${MYSCRIPTDIR})/${SCRIPTNAME} -i
+	ssh -tt $chost ${MYSUDO} ${tmpdir}/$(basename ${MYSCRIPTDIR})/${SCRIPTNAME} -i
 
 	#ssh $chost ${tmpdir}/$(basename ${MYSCRIPTDIR})/${SCRIPTNAME} -i
 	#ssh $chost yum install -y sudo #TODO disable
@@ -79,8 +79,8 @@ copy_key(){
 	chost="$1"
 
 	scp -r ~/.ssh/ ${chost}:${tmpdir}/
-	ssh ${chost} ${MYSUDO} cp -a ${tmpdir}/.ssh/ /home/$hadoop_user/
-	ssh ${chost} ${MYSUDO} chown -R $hadoop_user:$hadoop_user /home/$hadoop_user/
+	ssh -tt ${chost} ${MYSUDO} cp -a ${tmpdir}/.ssh/ /home/$hadoop_user/
+	ssh -tt ${chost} ${MYSUDO} chown -R $hadoop_user:$hadoop_user /home/$hadoop_user/
 	#ssh ${chost} ${MYSUDO} rm -rf ${tmpdir}/.ssh
 }
 
@@ -331,7 +331,7 @@ my_install_master(){
     my_start
 }
 
-while getopts “hiasrmegpckd” OPTION 
+while getopts “hiasrmegpckdo:” OPTION 
 do
      case $OPTION in
          h)
@@ -387,6 +387,11 @@ do
              ;;
          d)
 	     add_hosts
+             exit 1
+             ;;
+         o)
+	     CURRENT_HOST="${OPTARG:-localhost}"
+	     install_on_host "$CURRENT_HOST"
              exit 1
              ;;
          ?)
